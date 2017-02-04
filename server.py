@@ -7,7 +7,21 @@ WAITING = []
 CONNECTION_LIST = []
 
 def get_paired_member(sock):
-    return [item for item in PAIRED_LIST if item[0] == 1 or item[1] == 1]
+    l =  [socket for socket in PAIRED_LIST if socket[0] == sock or socket[1] == sock]
+    if l:
+        if l[0][0] == sock:
+            return l[0][1]
+        else:
+            return l[0][0]
+    else:
+        return []
+
+def delete_pairings(sock):
+    l =  [socket for socket in PAIRED_LIST if socket[0] == sock or socket[1] == sock]
+    if l:
+        l = l.pop()
+        PAIRED_LIST.remove(l)
+    pass
 
 def get_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -20,30 +34,61 @@ def get_ip():
         s.close()
     return IP
 
+def new_connection(sock):
+    if WAITING:
+        othersock = WAITING.pop()
+        PAIRED_LIST.append((othersock,sock))
+        send_message(sock,"You are now connected")
+        send_message(othersock,"You are now connected")
+    else:
+        WAITING.append(sock)
+        send_message(sock,"Waiting for other user")
+    CONNECTION_LIST.append(sock)
 
-#Function to broadcast chat messages to all connected clients
-def broadcast_data (sock, message):
-    #Do not send the message to master socket and the client who has send us the message
-    for socket in CONNECTION_LIST:
-        if socket != server_socket :
-            try :
-                socket.send(message)
-            except :
-                # broken socket connection may be, chat client pressed ctrl+c for example
-                socket.close()
-                print "socket is offline" + socket
-                CONNECTION_LIST.remove(socket)
- 
+    pass
+
+def connection_closed(sock):
+    pairedsocket = get_paired_member(sock)
+    if pairedsocket:
+        message = "Stranger is offline"
+        try:
+            pairedsocket.send(message)
+        except Exception,e:
+            pass
+        delete_pairings(sock)
+    pass
+
+
+
+def send_message_to_paired(sock,message):
+    socket = get_paired_member(sock)
+    if socket:
+        send_message(socket,message)
+    else:
+        send_message(sock,"Not Connected")
+    pass
+
+
+def send_message(sock,message):
+    try :
+        sock.send(message)
+    except Exception,e:
+        print e
+        connection_closed(sock)
+
+
+
+
 if __name__ == "__main__":
      
-    RECV_BUFFER = 4096 
+    # List to keep track of socket descriptors
+    RECV_BUFFER = 4096 # Advisable to keep it as an exponent of 2
     PORT = 5000
      
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # this has no effect, why ?
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     ip = get_ip()
-    print ip
     server_socket.bind((ip, PORT))
     server_socket.listen(10)
  
@@ -51,37 +96,29 @@ if __name__ == "__main__":
     CONNECTION_LIST.append(server_socket)
  
     print "Chat server started on port " + str(PORT)
-    # import ipdb
-    # ipdb.set_trace()
+ 
     while 1:
         # Get the list sockets which are ready to be read through select
-        read_sockets,write_sockets,error_sockets = select.select(CONNECTION_LIST,[],[])
- 
-        for sock in read_sockets:
-            #New connection
-            if sock == server_socket:
-                # Handle the case in which there is a new connection recieved through server_socket
-                sockfd, addr = sock.accept()
-                CONNECTION_LIST.append(sockfd)
-                print "Client (%s, %s) connected" % addr
-                 
-                broadcast_data(sockfd, "[%s:%s] entered room\n" % addr)
-             
-            #Some incoming message from a client
-            else:
-                # Data recieved from client, process it
-                try:
-                    #In Windows, sometimes when a TCP program closes abruptly,
-                    # a "Connection reset by peer" exception will be thrown
-                    data = sock.recv(RECV_BUFFER)
-                    if data:
-                        broadcast_data(sock, "\r" + '<' + str(sock.getpeername()) + '> ' + data)                
-                 
-                except:
-                    broadcast_data(sock, "Client (%s, %s) is offline" % addr)
-                    print "Client (%s, %s) is offline" % addr
-                    sock.close()
-                    CONNECTION_LIST.remove(sock)
-                    continue
-     
+        try:
+            read_sockets,write_sockets,error_sockets = select.select(CONNECTION_LIST,[],[])
+
+            for sock in read_sockets:
+                #New connection
+                if sock == server_socket:
+                    # Handle the case in which there is a new connection recieved through server_socket
+                    sockfd, addr = server_socket.accept()
+                    new_connection(sockfd)
+                #Some incoming message from a client
+                else:
+                    # Data recieved from client, process it
+                    try:
+                        data = sock.recv(RECV_BUFFER)
+                        if data:
+                            send_message_to_paired(sock,data)
+                            # broadcast_data(sock, "\r" + '<' + str(sock.getpeername()) + '> ' + data)
+                    except Exception,e:
+                        connection_closed(sock)
+                        continue
+        except:
+            pass
     server_socket.close()
